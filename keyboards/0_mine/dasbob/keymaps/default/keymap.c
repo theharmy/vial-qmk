@@ -1,40 +1,69 @@
 // Copyright 2021 weteor | 2022 Conor Burns (@Conor-Burns)
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "oneshot.h"
+#include "swapper.h"
 
 #include QMK_KEYBOARD_H
 enum layers {
     _ALPHA_QWERTY = 0,
-    _ALPHA_COLEMAK,
-    _SYM,
-    _NAV,
-    _NUM,
+    DEF,
+    SYM,
+    NAV,
+    NUM,
     _CFG,
 };
+
+
+
+#define HOME G(KC_LEFT)
+#define END G(KC_RGHT)
+#define FWD G(KC_RBRC)
+#define BACK G(KC_LBRC)
+#define TAB_L G(S(KC_LBRC))
+#define TAB_R G(S(KC_RBRC))
+#define SPACE_L A(G(KC_LEFT))
+#define SPACE_R A(G(KC_RGHT))
+#define LA_SYM MO(SYM)
+#define LA_NAV MO(NAV)
+
+
+enum keycodes {
+    // Custom oneshot mod implementation with no timers.
+    OS_SHFT = SAFE_RANGE,
+    OS_CTRL,
+    OS_ALT,
+    OS_CMD,
+
+    SW_WIN,  // Switch to next window         (cmd-tab)
+    SW_LANG, // Switch to next input language (ctl-spc)
+};
+
+
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
     // clang-format off
 
-    [_ALPHA_QWERTY] = LAYOUT_split_3x5_3(
+    [DEF] = LAYOUT_split_3x5_3(
         KC_Q,         KC_W,    KC_E,    KC_R,    KC_T,                                                KC_Y,    KC_U,    KC_I,    KC_O,    KC_P,
         KC_A,         KC_S,    KC_D,    KC_F,    KC_G,                                                KC_H,    KC_J,    KC_K,    KC_L,    KC_SCLN,
         LSFT_T(KC_Z), KC_X,    KC_C,    KC_V,    KC_B,                                                KC_N,    KC_M,    KC_COMM, KC_DOT,  RSFT_T(KC_SLSH),
 
-                        LCTL_T(KC_ESC), LT(_NUM, KC_SPC), LT(_NAV, KC_TAB),     LT(_SYM, KC_BSPC), KC_ENT, LALT_T(KC_DEL)
+                        LCTL_T(KC_ESC), LT(NUM, KC_SPC), LT(NAV, KC_TAB),     LT(SYM, KC_BSPC), KC_ENT, LALT_T(KC_DEL)
     ),
-    [_ALPHA_COLEMAK] = LAYOUT_split_3x5_3(
+    [SYM] = LAYOUT_split_3x5_3(
         KC_Q,         KC_W,    KC_F,    KC_P,    KC_G,                                                KC_J,    KC_L,    KC_U,    KC_Y,    KC_QUOT,
         KC_A,         KC_R,    KC_S,    KC_T,    KC_D,                                                KC_H,    KC_N,    KC_E,    KC_I,    KC_O,
         LSFT_T(KC_Z), KC_X,    KC_C,    KC_V,    KC_B,                                                KC_K,    KC_M,    KC_COMM, KC_DOT,  RSFT_T(KC_SCLN),
-                        LCTL_T(KC_ENT), LT(_NUM, KC_SPC), LT(_NAV, KC_TAB),     LT(_SYM, KC_BSPC), KC_ENT, LALT_T(KC_DEL)
+                        LCTL_T(KC_ENT), LT(NUM, KC_SPC), LT(NAV, KC_TAB),     LT(SYM, KC_BSPC), KC_ENT, LALT_T(KC_DEL)
     ),
-    [_SYM] = LAYOUT_split_3x5_3(
+    [NAV] = LAYOUT_split_3x5_3(
         KC_GRV , KC_CIRC,   KC_AT,  KC_DLR, KC_TILD,                                KC_AMPR, KC_EXLM, KC_PIPE, KC_UNDS, KC_HASH,
         KC_SLSH, KC_LBRC, KC_LCBR, KC_LPRN,  KC_EQL,                                KC_ASTR, KC_RPRN, KC_RCBR, KC_RBRC, KC_BSLS,
         _______, KC_QUES, KC_PLUS, KC_PERC, XXXXXXX,                                XXXXXXX, XXXXXXX, KC_MINS, XXXXXXX, _______,
                                         XXXXXXX, MO(_CFG), XXXXXXX,     XXXXXXX, XXXXXXX, XXXXXXX
     ),
-    [_NAV] = LAYOUT_split_3x5_3(
+    [NUM] = LAYOUT_split_3x5_3(
         XXXXXXX, KC_VOLD, KC_MUTE, KC_VOLU, CK_TOGG,                                CK_TOGG, KC_PGDN,   KC_UP, KC_PGUP,  KC_DEL,
         KC_MPRV, KC_MPLY, KC_MSTP, KC_MNXT, XXXXXXX,                                KC_HOME, KC_LEFT, KC_DOWN, KC_RGHT,  KC_END,
         XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,                                XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,
@@ -84,3 +113,71 @@ bool oled_task_user(){
     oled_write_raw_P(dasbob, sizeof(dasbob));
     return false;
 };
+
+
+bool is_oneshot_cancel_key(uint16_t keycode) {
+    switch (keycode) {
+    case LA_SYM:
+    case LA_NAV:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool is_oneshot_ignored_key(uint16_t keycode) {
+    switch (keycode) {
+    case LA_SYM:
+    case LA_NAV:
+    case KC_LSFT:
+    case OS_SHFT:
+    case OS_CTRL:
+    case OS_ALT:
+    case OS_CMD:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool sw_win_active = false;
+bool sw_lang_active = false;
+
+oneshot_state os_shft_state = os_up_unqueued;
+oneshot_state os_ctrl_state = os_up_unqueued;
+oneshot_state os_alt_state = os_up_unqueued;
+oneshot_state os_cmd_state = os_up_unqueued;
+
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    update_swapper(
+        &sw_win_active, KC_LGUI, KC_TAB, SW_WIN,
+        keycode, record
+    );
+    update_swapper(
+        &sw_lang_active, KC_LCTL, KC_SPC, SW_LANG,
+        keycode, record
+    );
+
+    update_oneshot(
+        &os_shft_state, KC_LSFT, OS_SHFT,
+        keycode, record
+    );
+    update_oneshot(
+        &os_ctrl_state, KC_LCTL, OS_CTRL,
+        keycode, record
+    );
+    update_oneshot(
+        &os_alt_state, KC_LALT, OS_ALT,
+        keycode, record
+    );
+    update_oneshot(
+        &os_cmd_state, KC_LCMD, OS_CMD,
+        keycode, record
+    );
+
+    return true;
+}
+
+layer_state_t layer_state_set_user(layer_state_t state) {
+    return update_tri_layer_state(state, SYM, NAV, NUM);
+}
